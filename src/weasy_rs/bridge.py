@@ -1,4 +1,4 @@
-"""Native ctypes + CPython C-API bridge for weasy-rs."""
+"""Native ctypes C-ABI bridge for weasy-rs."""
 
 from __future__ import annotations
 
@@ -56,8 +56,6 @@ def _find_or_build_lib() -> Path | None:
         try:
             target_dir = pkg_dir / "_rust_target"
             env = os.environ.copy()
-            if sys.platform == "darwin":
-                env.setdefault("RUSTFLAGS", "-C link-arg=-undefined -C link-arg=dynamic_lookup")
             subprocess.run(
                 [
                     cargo_bin,
@@ -98,14 +96,23 @@ def _get_lib() -> ctypes.CDLL | None:
         return None
 
     try:
-        dll = ctypes.PyDLL(str(lib_path))
-        dll.weasy_rs_render_pdf_bytes.argtypes = [
+        dll = ctypes.CDLL(str(lib_path))
+        dll.weasy_rs_render_pdf_buf.argtypes = [
             ctypes.c_char_p,
             ctypes.c_size_t,
             ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        dll.weasy_rs_render_pdf_buf.restype = ctypes.c_void_p
+
+        dll.weasy_rs_free_buf.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_size_t,
             ctypes.c_size_t,
         ]
-        dll.weasy_rs_render_pdf_bytes.restype = ctypes.py_object
+        dll.weasy_rs_free_buf.restype = None
 
         dll.weasy_rs_render_pdf_to_file.argtypes = [
             ctypes.c_char_p,
@@ -136,15 +143,22 @@ def rust_render_pdf_bytes(html: str, base_url: str | None = None) -> bytes:
         raise RuntimeError("weasy-rs native library is not available")
     html_bytes = html.encode("utf-8")
     base_bytes = base_url.encode("utf-8") if base_url else b""
-    res = dll.weasy_rs_render_pdf_bytes(
+    out_len = ctypes.c_size_t(0)
+    out_cap = ctypes.c_size_t(0)
+    ptr = dll.weasy_rs_render_pdf_buf(
         html_bytes,
         len(html_bytes),
         base_bytes if base_bytes else None,
         len(base_bytes),
+        ctypes.byref(out_len),
+        ctypes.byref(out_cap),
     )
-    if not isinstance(res, bytes):
+    if not ptr:
         raise RuntimeError("weasy-rs failed to render PDF bytes")
-    return res
+    try:
+        return ctypes.string_at(ptr, out_len.value)
+    finally:
+        dll.weasy_rs_free_buf(ptr, out_len.value, out_cap.value)
 
 
 def rust_render_pdf_to_file(

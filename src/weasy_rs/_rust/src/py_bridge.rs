@@ -1,34 +1,9 @@
-//! Zero-dependency CPython C-API / ctypes bridge for `weasy-rs`.
+//! Zero-dependency C-ABI / ctypes bridge for `weasy-rs`.
+//! Uses pure C-ABI buffer functions so the shared library links cleanly on
+//! Linux, macOS, and Windows without requiring `python3.lib` at compile time.
 
-use std::ffi::{c_char, c_int, c_void};
+use std::ffi::c_int;
 use std::slice;
-
-#[repr(C)]
-pub struct PyObject {
-    _private: [u8; 0],
-}
-
-#[cfg(unix)]
-extern "C" {
-    fn PyBytes_FromStringAndSize(v: *const c_char, len: isize) -> *mut PyObject;
-    fn Py_IncRef(o: *mut PyObject);
-    static mut _Py_NoneStruct: PyObject;
-}
-
-#[cfg(windows)]
-#[link(name = "python3")]
-extern "C" {
-    fn PyBytes_FromStringAndSize(v: *const c_char, len: isize) -> *mut PyObject;
-    fn Py_IncRef(o: *mut PyObject);
-    static mut _Py_NoneStruct: PyObject;
-}
-
-#[inline]
-unsafe fn py_none() -> *mut PyObject {
-    let ptr = std::ptr::addr_of_mut!(_Py_NoneStruct);
-    Py_IncRef(ptr);
-    ptr
-}
 
 unsafe fn slice_to_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     if ptr.is_null() {
@@ -38,33 +13,50 @@ unsafe fn slice_to_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     std::str::from_utf8(bytes).ok()
 }
 
-/// Renders HTML + CSS directly to a Python `bytes` object containing the PDF document.
+/// Renders HTML + CSS to an owned heap buffer and writes its length and capacity
+/// to `out_len` and `out_cap`. The caller must free the returned pointer with
+/// `weasy_rs_free_buf(ptr, len, cap)`.
 #[no_mangle]
-pub unsafe extern "C" fn weasy_rs_render_pdf_bytes(
+pub unsafe extern "C" fn weasy_rs_render_pdf_buf(
     html_ptr: *const u8,
     html_len: usize,
     base_url_ptr: *const u8,
     base_url_len: usize,
-) -> *mut c_void {
+    out_len: *mut usize,
+    out_cap: *mut usize,
+) -> *mut u8 {
     let res = std::panic::catch_unwind(|| {
+        if out_len.is_null() || out_cap.is_null() {
+            return std::ptr::null_mut();
+        }
+        *out_len = 0;
+        *out_cap = 0;
         let html = match slice_to_str(html_ptr, html_len) {
             Some(s) => s,
-            None => return py_none(),
+            None => return std::ptr::null_mut(),
         };
         let base_url = if base_url_ptr.is_null() || base_url_len == 0 {
             None
         } else {
             slice_to_str(base_url_ptr, base_url_len)
         };
-        let pdf_bytes = crate::layout::render_html_to_pdf(html, base_url);
-        PyBytes_FromStringAndSize(
-            pdf_bytes.as_ptr() as *const c_char,
-            pdf_bytes.len() as isize,
-        )
+        let mut pdf_bytes = crate::layout::render_html_to_pdf(html, base_url);
+        let len = pdf_bytes.len();
+        let cap = pdf_bytes.capacity();
+        let ptr = pdf_bytes.as_mut_ptr();
+        std::mem::forget(pdf_bytes);
+        *out_len = len;
+        *out_cap = cap;
+        ptr
     });
-    match res {
-        Ok(ptr) => ptr as *mut c_void,
-        Err(_) => py_none() as *mut c_void,
+    res.unwrap_or(std::ptr::null_mut())
+}
+
+/// Frees a buffer previously allocated by `weasy_rs_render_pdf_buf`.
+#[no_mangle]
+pub unsafe extern "C" fn weasy_rs_free_buf(ptr: *mut u8, len: usize, cap: usize) {
+    if !ptr.is_null() && cap > 0 {
+        let _ = Vec::from_raw_parts(ptr, len, cap);
     }
 }
 
