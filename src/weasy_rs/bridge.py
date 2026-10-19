@@ -24,8 +24,17 @@ def _lib_filename() -> str:
     return "libweasy_rs.so"
 
 
+def _core_lib_filename() -> str:
+    if sys.platform == "darwin":
+        return "libmm_core_rs.dylib"
+    if sys.platform == "win32":
+        return "mm_core_rs.dll"
+    return "libmm_core_rs.so"
+
+
 def _find_or_build_lib() -> Path | None:
     lib_name = _lib_filename()
+    core_lib_name = _core_lib_filename()
     pkg_dir = Path(__file__).resolve().parent
     repo_root = pkg_dir.parent.parent
 
@@ -37,6 +46,8 @@ def _find_or_build_lib() -> Path | None:
         meipass = Path(sys._MEIPASS)
         candidates.insert(0, meipass / "weasy_rs" / lib_name)
         candidates.insert(0, meipass / lib_name)
+        candidates.append(meipass / "mm_to_json" / "lib" / core_lib_name)
+        candidates.append(meipass / core_lib_name)
 
     for cand in candidates:
         if cand.exists():
@@ -81,6 +92,15 @@ def _find_or_build_lib() -> Path | None:
                     return built
         except Exception as e:
             logger.debug("weasy-rs auto-build failed: %s", e)
+
+    try:
+        from mm_to_json.rust_bridge import _find_or_build_rust_lib
+
+        core_path = _find_or_build_rust_lib()
+        if core_path and core_path.exists():
+            return core_path
+    except Exception:
+        pass
 
     return None
 
