@@ -1,0 +1,14 @@
+[package]
+name = "weasy_rs"
+version = "0.1.0"
+edition = "2021"
+license = "BSD-3-Clause"
+description = "High-performance Rust HTML+CSS Paged Media to PDF rendering engine (drop-in WeasyPrint replacement)"
+repository = "https://github.com/pfisherogden/weasy-rs"
+
+[lib]
+name = "weasy_rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+flate2 = "1.0"
